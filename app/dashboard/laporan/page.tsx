@@ -3,72 +3,90 @@ import { db } from '@/lib/db'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import type { Coa, JournalItem } from '@/lib/types'
+
+type CoaWithItems = Coa & { journalItems: JournalItem[] }
+type CoaWithBalance = CoaWithItems & { balance: number }
+
+function calcBalance(coa: CoaWithItems): number {
+  return coa.journalItems.reduce((sum: number, item: JournalItem) => {
+    return coa.normalBalance === 'DEBIT'
+      ? sum + item.debit - item.credit
+      : sum + item.credit - item.debit
+  }, 0)
+}
+
+function formatRupiah(v: number): string {
+  return new Intl.NumberFormat('id-ID', { minimumFractionDigits: 0 }).format(v)
+}
 
 export default async function LaporanPage() {
   const session = await getSession()
   if (!session) return null
 
-  // Fetch all COAs and their balances
-  const coas = await db.coa.findMany({
-    where: { tenantId: session.tenantId },
+  const coas: CoaWithItems[] = await db.coa.findMany({
+    where: { tenantId: session.tenantId as string },
     include: {
       journalItems: {
-        include: {
-          journal: true
-        }
+        include: { journal: true }
       }
     },
     orderBy: { code: 'asc' }
   })
 
-  // Calculate balances
-  const balances = coas.map(coa => {
-    let balance = 0
-    coa.journalItems.forEach(item => {
-      if (coa.normalBalance === 'DEBIT') {
-        balance += item.debit - item.credit
-      } else {
-        balance += item.credit - item.debit
-      }
-    })
-    return { ...coa, balance }
-  })
+  const balances: CoaWithBalance[] = coas.map((coa: CoaWithItems) => ({
+    ...coa,
+    balance: calcBalance(coa)
+  }))
 
-  // Group by type
-  const assets = balances.filter(c => c.type === 'ASSET')
-  const liabilities = balances.filter(c => c.type === 'LIABILITY')
-  const equities = balances.filter(c => c.type === 'EQUITY')
-  const revenues = balances.filter(c => c.type === 'REVENUE')
-  const expenses = balances.filter(c => c.type === 'EXPENSE')
+  const assets = balances.filter((c: CoaWithBalance) => c.type === 'ASSET')
+  const liabilities = balances.filter((c: CoaWithBalance) => c.type === 'LIABILITY')
+  const equities = balances.filter((c: CoaWithBalance) => c.type === 'EQUITY')
+  const revenues = balances.filter((c: CoaWithBalance) => c.type === 'REVENUE')
+  const expenses = balances.filter((c: CoaWithBalance) => c.type === 'EXPENSE')
 
-  const totalAssets = assets.reduce((sum, c) => sum + c.balance, 0)
-  const totalLiabilities = liabilities.reduce((sum, c) => sum + c.balance, 0)
-  const totalEquities = equities.reduce((sum, c) => sum + c.balance, 0)
-  const totalRevenues = revenues.reduce((sum, c) => sum + c.balance, 0)
-  const totalExpenses = expenses.reduce((sum, c) => sum + c.balance, 0)
-
+  const totalAssets = assets.reduce((sum: number, c: CoaWithBalance) => sum + c.balance, 0)
+  const totalLiabilities = liabilities.reduce((sum: number, c: CoaWithBalance) => sum + c.balance, 0)
+  const totalEquities = equities.reduce((sum: number, c: CoaWithBalance) => sum + c.balance, 0)
+  const totalRevenues = revenues.reduce((sum: number, c: CoaWithBalance) => sum + c.balance, 0)
+  const totalExpenses = expenses.reduce((sum: number, c: CoaWithBalance) => sum + c.balance, 0)
   const netIncome = totalRevenues - totalExpenses
+
+  const totalDebitNeraca = balances.reduce((sum: number, c: CoaWithBalance) => {
+    const isDebit = c.normalBalance === 'DEBIT'
+    return sum + (isDebit && c.balance > 0 ? c.balance : (!isDebit && c.balance < 0 ? Math.abs(c.balance) : 0))
+  }, 0)
+  const totalCreditNeraca = balances.reduce((sum: number, c: CoaWithBalance) => {
+    const isDebit = c.normalBalance === 'DEBIT'
+    return sum + (!isDebit && c.balance > 0 ? c.balance : (isDebit && c.balance < 0 ? Math.abs(c.balance) : 0))
+  }, 0)
+
+  const ReportRow = ({ label, value, bold = false }: { label: string; value: number; bold?: boolean }) => (
+    <div className={`flex justify-between ${bold ? 'font-bold border-t pt-2 mt-2' : 'text-sm'}`}>
+      <span>{label}</span>
+      <span>{formatRupiah(value)}</span>
+    </div>
+  )
 
   return (
     <div className="space-y-6">
       <div>
         <h2 className="text-2xl font-bold tracking-tight">Laporan Keuangan</h2>
-        <p className="text-muted-foreground">
-          Laporan keuangan BUMDes otomatis berdasarkan jurnal.
-        </p>
+        <p className="text-muted-foreground">Laporan keuangan BUMDes otomatis berdasarkan jurnal.</p>
       </div>
 
       <Tabs defaultValue="neraca" className="w-full">
         <TabsList className="grid w-full grid-cols-3">
-          <TabsTrigger value="neraca">Neraca (Balance Sheet)</TabsTrigger>
-          <TabsTrigger value="labarugi">Laba Rugi (Income Statement)</TabsTrigger>
-          <TabsTrigger value="neracasaldo">Neraca Saldo (Trial Balance)</TabsTrigger>
+          <TabsTrigger value="neraca">Neraca</TabsTrigger>
+          <TabsTrigger value="labarugi">Laba Rugi</TabsTrigger>
+          <TabsTrigger value="neracasaldo">Neraca Saldo</TabsTrigger>
         </TabsList>
-        
+
+        {/* === NERACA === */}
         <TabsContent value="neraca" className="mt-6">
           <Card>
             <CardHeader className="text-center border-b pb-6">
-              <CardTitle className="text-2xl uppercase">{session.tenantName}</CardTitle>
+              <CardTitle className="text-2xl uppercase">{session.tenantName as string}</CardTitle>
               <p className="text-muted-foreground font-medium">LAPORAN POSISI KEUANGAN (NERACA)</p>
             </CardHeader>
             <CardContent className="pt-6">
@@ -77,108 +95,86 @@ export default async function LaporanPage() {
                 <div>
                   <h3 className="font-bold text-lg mb-4 border-b pb-2">ASET</h3>
                   <div className="space-y-2">
-                    {assets.map(coa => (
-                      <div key={coa.id} className="flex justify-between text-sm">
-                        <span>{coa.name}</span>
-                        <span>{new Intl.NumberFormat('id-ID').format(coa.balance)}</span>
-                      </div>
+                    {assets.map((coa: CoaWithBalance) => (
+                      <ReportRow key={coa.id} label={`${coa.code} - ${coa.name}`} value={coa.balance} />
                     ))}
                   </div>
-                  <div className="flex justify-between font-bold mt-4 pt-4 border-t">
-                    <span>TOTAL ASET</span>
-                    <span>{new Intl.NumberFormat('id-ID').format(totalAssets)}</span>
-                  </div>
+                  <ReportRow label="TOTAL ASET" value={totalAssets} bold />
                 </div>
 
                 {/* Kewajiban & Ekuitas */}
                 <div>
                   <h3 className="font-bold text-lg mb-4 border-b pb-2">KEWAJIBAN</h3>
-                  <div className="space-y-2 mb-6">
-                    {liabilities.map(coa => (
-                      <div key={coa.id} className="flex justify-between text-sm">
-                        <span>{coa.name}</span>
-                        <span>{new Intl.NumberFormat('id-ID').format(coa.balance)}</span>
-                      </div>
-                    ))}
-                    <div className="flex justify-between font-bold mt-2 pt-2 border-t text-sm">
-                      <span>Total Kewajiban</span>
-                      <span>{new Intl.NumberFormat('id-ID').format(totalLiabilities)}</span>
-                    </div>
-                  </div>
-
-                  <h3 className="font-bold text-lg mb-4 border-b pb-2">EKUITAS</h3>
                   <div className="space-y-2">
-                    {equities.map(coa => (
-                      <div key={coa.id} className="flex justify-between text-sm">
-                        <span>{coa.name}</span>
-                        <span>{new Intl.NumberFormat('id-ID').format(coa.balance)}</span>
-                      </div>
+                    {liabilities.map((coa: CoaWithBalance) => (
+                      <ReportRow key={coa.id} label={`${coa.code} - ${coa.name}`} value={coa.balance} />
+                    ))}
+                  </div>
+                  <ReportRow label="Total Kewajiban" value={totalLiabilities} bold />
+
+                  <h3 className="font-bold text-lg mt-6 mb-4 border-b pb-2">EKUITAS</h3>
+                  <div className="space-y-2">
+                    {equities.map((coa: CoaWithBalance) => (
+                      <ReportRow key={coa.id} label={`${coa.code} - ${coa.name}`} value={coa.balance} />
                     ))}
                     <div className="flex justify-between text-sm">
                       <span>Laba/Rugi Tahun Berjalan</span>
-                      <span>{new Intl.NumberFormat('id-ID').format(netIncome)}</span>
-                    </div>
-                    <div className="flex justify-between font-bold mt-2 pt-2 border-t text-sm">
-                      <span>Total Ekuitas</span>
-                      <span>{new Intl.NumberFormat('id-ID').format(totalEquities + netIncome)}</span>
+                      <span className={netIncome < 0 ? 'text-red-600' : 'text-green-600'}>
+                        {netIncome < 0 ? `(${formatRupiah(Math.abs(netIncome))})` : formatRupiah(netIncome)}
+                      </span>
                     </div>
                   </div>
-
-                  <div className="flex justify-between font-bold mt-4 pt-4 border-t">
-                    <span>TOTAL KEWAJIBAN & EKUITAS</span>
-                    <span>{new Intl.NumberFormat('id-ID').format(totalLiabilities + totalEquities + netIncome)}</span>
-                  </div>
+                  <ReportRow label="Total Ekuitas" value={totalEquities + netIncome} bold />
+                  <ReportRow label="TOTAL KEWAJIBAN & EKUITAS" value={totalLiabilities + totalEquities + netIncome} bold />
                 </div>
               </div>
+
+              {/* Balance check */}
+              {Math.abs(totalAssets - (totalLiabilities + totalEquities + netIncome)) > 1 && (
+                <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded text-sm text-red-700">
+                  ⚠ Neraca tidak seimbang. Periksa kembali entri jurnal Anda.
+                </div>
+              )}
             </CardContent>
           </Card>
         </TabsContent>
 
+        {/* === LABA RUGI === */}
         <TabsContent value="labarugi" className="mt-6">
           <Card>
             <CardHeader className="text-center border-b pb-6">
-              <CardTitle className="text-2xl uppercase">{session.tenantName}</CardTitle>
+              <CardTitle className="text-2xl uppercase">{session.tenantName as string}</CardTitle>
               <p className="text-muted-foreground font-medium">LAPORAN LABA RUGI</p>
             </CardHeader>
             <CardContent className="pt-6 max-w-2xl mx-auto">
               <h3 className="font-bold text-lg mb-4 border-b pb-2">PENDAPATAN</h3>
               <div className="space-y-2 mb-6 pl-4">
-                {revenues.map(coa => (
-                  <div key={coa.id} className="flex justify-between text-sm">
-                    <span>{coa.name}</span>
-                    <span>{new Intl.NumberFormat('id-ID').format(coa.balance)}</span>
-                  </div>
+                {revenues.map((coa: CoaWithBalance) => (
+                  <ReportRow key={coa.id} label={`${coa.code} - ${coa.name}`} value={coa.balance} />
                 ))}
-                <div className="flex justify-between font-bold mt-2 pt-2 border-t text-sm">
-                  <span>Total Pendapatan</span>
-                  <span>{new Intl.NumberFormat('id-ID').format(totalRevenues)}</span>
-                </div>
+                <ReportRow label="Total Pendapatan" value={totalRevenues} bold />
               </div>
 
               <h3 className="font-bold text-lg mb-4 border-b pb-2">BEBAN OPERASIONAL</h3>
               <div className="space-y-2 mb-6 pl-4">
-                {expenses.map(coa => (
-                  <div key={coa.id} className="flex justify-between text-sm">
-                    <span>{coa.name}</span>
-                    <span>{new Intl.NumberFormat('id-ID').format(coa.balance)}</span>
-                  </div>
+                {expenses.map((coa: CoaWithBalance) => (
+                  <ReportRow key={coa.id} label={`${coa.code} - ${coa.name}`} value={coa.balance} />
                 ))}
-                <div className="flex justify-between font-bold mt-2 pt-2 border-t text-sm">
+                <div className="flex justify-between font-bold border-t pt-2 mt-2 text-sm">
                   <span>Total Beban Operasional</span>
-                  <span>({new Intl.NumberFormat('id-ID').format(totalExpenses)})</span>
+                  <span>({formatRupiah(totalExpenses)})</span>
                 </div>
               </div>
 
-              <div className="flex justify-between font-bold mt-8 pt-4 border-t-2 text-lg">
+              <div className={`flex justify-between font-bold mt-8 pt-4 border-t-2 text-lg ${netIncome < 0 ? 'text-red-600' : 'text-green-600'}`}>
                 <span>LABA (RUGI) BERSIH</span>
-                <span className={netIncome < 0 ? 'text-red-600' : 'text-green-600'}>
-                  {new Intl.NumberFormat('id-ID').format(netIncome)}
-                </span>
+                <span>{netIncome < 0 ? `(${formatRupiah(Math.abs(netIncome))})` : formatRupiah(netIncome)}</span>
               </div>
             </CardContent>
           </Card>
         </TabsContent>
 
+        {/* === NERACA SALDO === */}
         <TabsContent value="neracasaldo" className="mt-6">
           <Card>
             <CardHeader>
@@ -195,26 +191,31 @@ export default async function LaporanPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {balances.map(coa => {
+                  {balances.map((coa: CoaWithBalance) => {
                     const isDebit = coa.normalBalance === 'DEBIT'
-                    const debitAmount = isDebit && coa.balance > 0 ? coa.balance : (!isDebit && coa.balance < 0 ? Math.abs(coa.balance) : 0)
-                    const creditAmount = !isDebit && coa.balance > 0 ? coa.balance : (isDebit && coa.balance < 0 ? Math.abs(coa.balance) : 0)
-                    
+                    const debitAmount = (isDebit && coa.balance > 0) ? coa.balance : (!isDebit && coa.balance < 0 ? Math.abs(coa.balance) : 0)
+                    const creditAmount = (!isDebit && coa.balance > 0) ? coa.balance : (isDebit && coa.balance < 0 ? Math.abs(coa.balance) : 0)
                     if (debitAmount === 0 && creditAmount === 0) return null
-
                     return (
                       <TableRow key={coa.id}>
-                        <TableCell>{coa.code}</TableCell>
+                        <TableCell className="font-mono">{coa.code}</TableCell>
                         <TableCell>{coa.name}</TableCell>
                         <TableCell className="text-right">
-                          {debitAmount > 0 ? new Intl.NumberFormat('id-ID').format(debitAmount) : '-'}
+                          {debitAmount > 0 ? formatRupiah(debitAmount) : '-'}
                         </TableCell>
                         <TableCell className="text-right">
-                          {creditAmount > 0 ? new Intl.NumberFormat('id-ID').format(creditAmount) : '-'}
+                          {creditAmount > 0 ? formatRupiah(creditAmount) : '-'}
                         </TableCell>
                       </TableRow>
                     )
                   })}
+                  <TableRow className="font-bold bg-muted/50 border-t-2">
+                    <TableCell colSpan={2}>TOTAL</TableCell>
+                    <TableCell className="text-right">{formatRupiah(totalDebitNeraca)}</TableCell>
+                    <TableCell className={`text-right ${Math.abs(totalDebitNeraca - totalCreditNeraca) > 1 ? 'text-red-600' : ''}`}>
+                      {formatRupiah(totalCreditNeraca)}
+                    </TableCell>
+                  </TableRow>
                 </TableBody>
               </Table>
             </CardContent>

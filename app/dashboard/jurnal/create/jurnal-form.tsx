@@ -8,20 +8,14 @@ import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { toast } from 'sonner'
-import { Plus, Trash2 } from 'lucide-react'
+import { Plus, Trash2, AlertCircle, CheckCircle2 } from 'lucide-react'
 
-type Coa = {
-  id: string
-  code: string
-  name: string
-}
+type Coa = { id: string; code: string; name: string; type: string; normalBalance: string }
 
-type JournalItem = {
-  id: string
-  coaId: string
-  debit: number
-  credit: number
-}
+type JournalItem = { id: string; coaId: string; debit: string; credit: string }
+
+const formatRupiah = (v: number) =>
+  new Intl.NumberFormat('id-ID', { minimumFractionDigits: 0 }).format(v)
 
 export function JurnalForm({ coas }: { coas: Coa[] }) {
   const router = useRouter()
@@ -29,16 +23,19 @@ export function JurnalForm({ coas }: { coas: Coa[] }) {
   const [date, setDate] = useState(new Date().toISOString().split('T')[0])
   const [description, setDescription] = useState('')
   const [items, setItems] = useState<JournalItem[]>([
-    { id: '1', coaId: '', debit: 0, credit: 0 },
-    { id: '2', coaId: '', debit: 0, credit: 0 }
+    { id: '1', coaId: '', debit: '', credit: '' },
+    { id: '2', coaId: '', debit: '', credit: '' }
   ])
 
-  const totalDebit = items.reduce((sum, item) => sum + (Number(item.debit) || 0), 0)
-  const totalCredit = items.reduce((sum, item) => sum + (Number(item.credit) || 0), 0)
-  const isBalanced = totalDebit === totalCredit && totalDebit > 0
+  // Use integer cents to avoid floating-point comparison issues
+  const totalDebitCents = items.reduce((sum, item) => sum + Math.round((parseFloat(item.debit) || 0) * 100), 0)
+  const totalCreditCents = items.reduce((sum, item) => sum + Math.round((parseFloat(item.credit) || 0) * 100), 0)
+  const totalDebit = totalDebitCents / 100
+  const totalCredit = totalCreditCents / 100
+  const isBalanced = totalDebitCents === totalCreditCents && totalDebitCents > 0
 
   const addItem = () => {
-    setItems([...items, { id: Math.random().toString(), coaId: '', debit: 0, credit: 0 }])
+    setItems([...items, { id: Math.random().toString(36).slice(2), coaId: '', debit: '', credit: '' }])
   }
 
   const removeItem = (id: string) => {
@@ -49,26 +46,28 @@ export function JurnalForm({ coas }: { coas: Coa[] }) {
     setItems(items.filter(item => item.id !== id))
   }
 
-  const updateItem = (id: string, field: keyof JournalItem, value: any) => {
+  const updateItem = (id: string, field: keyof JournalItem, value: string) => {
     setItems(items.map(item => {
-      if (item.id === id) {
-        const updated = { ...item, [field]: value }
-        if (field === 'debit' && value > 0) updated.credit = 0
-        if (field === 'credit' && value > 0) updated.debit = 0
-        return updated
-      }
-      return item
+      if (item.id !== id) return item
+      const updated = { ...item, [field]: value }
+      // Auto-clear opposite side when a value is entered
+      if (field === 'debit' && parseFloat(value) > 0) updated.credit = ''
+      if (field === 'credit' && parseFloat(value) > 0) updated.debit = ''
+      return updated
     }))
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    
+
+    if (!description.trim()) {
+      toast.error('Keterangan transaksi harus diisi')
+      return
+    }
     if (!isBalanced) {
       toast.error('Jurnal tidak balance! Total Debit harus sama dengan Total Kredit.')
       return
     }
-
     if (items.some(item => !item.coaId)) {
       toast.error('Pilih akun untuk semua baris jurnal.')
       return
@@ -81,29 +80,38 @@ export function JurnalForm({ coas }: { coas: Coa[] }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           date,
-          description,
+          description: description.trim(),
           items: items.map(item => ({
             coaId: item.coaId,
-            debit: Number(item.debit) || 0,
-            credit: Number(item.credit) || 0
+            debit: parseFloat(item.debit) || 0,
+            credit: parseFloat(item.credit) || 0
           }))
         })
       })
 
+      const data = await res.json()
       if (res.ok) {
-        toast.success('Jurnal berhasil disimpan')
+        toast.success(`Jurnal ${data.journal?.number ?? ''} berhasil disimpan`)
         router.push('/dashboard/jurnal')
         router.refresh()
       } else {
-        const data = await res.json()
         toast.error(data.error || 'Gagal menyimpan jurnal')
       }
-    } catch (error) {
-      toast.error('Terjadi kesalahan sistem')
+    } catch {
+      toast.error('Terjadi kesalahan koneksi')
     } finally {
       setLoading(false)
     }
   }
+
+  // Group COAs by type for easier selection
+  const coaGroups = [
+    { label: 'Aset', items: coas.filter(c => c.type === 'ASSET') },
+    { label: 'Kewajiban', items: coas.filter(c => c.type === 'LIABILITY') },
+    { label: 'Ekuitas', items: coas.filter(c => c.type === 'EQUITY') },
+    { label: 'Pendapatan', items: coas.filter(c => c.type === 'REVENUE') },
+    { label: 'Beban', items: coas.filter(c => c.type === 'EXPENSE') },
+  ].filter(g => g.items.length > 0)
 
   return (
     <form onSubmit={handleSubmit}>
@@ -141,30 +149,37 @@ export function JurnalForm({ coas }: { coas: Coa[] }) {
               </Button>
             </div>
 
-            <div className="border rounded-md">
-              <div className="grid grid-cols-12 gap-4 p-3 bg-muted/50 font-medium text-sm border-b">
+            <div className="border rounded-md overflow-hidden">
+              <div className="grid grid-cols-12 gap-2 p-3 bg-muted/50 font-medium text-sm border-b">
                 <div className="col-span-5">Akun</div>
                 <div className="col-span-3 text-right">Debit (Rp)</div>
                 <div className="col-span-3 text-right">Kredit (Rp)</div>
-                <div className="col-span-1 text-center">Aksi</div>
+                <div className="col-span-1" />
               </div>
-              
+
               <div className="divide-y">
-                {items.map((item, index) => (
-                  <div key={item.id} className="grid grid-cols-12 gap-4 p-3 items-center">
+                {items.map((item) => (
+                  <div key={item.id} className="grid grid-cols-12 gap-2 p-3 items-center">
                     <div className="col-span-5">
                       <Select
                         value={item.coaId}
-                        onValueChange={(val) => updateItem(item.id, 'coaId', val)}
+                        onValueChange={(val) => updateItem(item.id, 'coaId', val ?? '')}
                       >
                         <SelectTrigger>
                           <SelectValue placeholder="Pilih Akun" />
                         </SelectTrigger>
                         <SelectContent>
-                          {coas.map(coa => (
-                            <SelectItem key={coa.id} value={coa.id}>
-                              {coa.code} - {coa.name}
-                            </SelectItem>
+                          {coaGroups.map(group => (
+                            <div key={group.label}>
+                              <div className="px-2 py-1 text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                                {group.label}
+                              </div>
+                              {group.items.map(coa => (
+                                <SelectItem key={coa.id} value={coa.id}>
+                                  {coa.code} - {coa.name}
+                                </SelectItem>
+                              ))}
+                            </div>
                           ))}
                         </SelectContent>
                       </Select>
@@ -173,28 +188,32 @@ export function JurnalForm({ coas }: { coas: Coa[] }) {
                       <Input
                         type="number"
                         min="0"
+                        step="any"
                         className="text-right"
-                        value={item.debit || ''}
+                        placeholder="0"
+                        value={item.debit}
                         onChange={(e) => updateItem(item.id, 'debit', e.target.value)}
-                        disabled={item.credit > 0}
+                        disabled={!!(item.credit && parseFloat(item.credit) > 0)}
                       />
                     </div>
                     <div className="col-span-3">
                       <Input
                         type="number"
                         min="0"
+                        step="any"
                         className="text-right"
-                        value={item.credit || ''}
+                        placeholder="0"
+                        value={item.credit}
                         onChange={(e) => updateItem(item.id, 'credit', e.target.value)}
-                        disabled={item.debit > 0}
+                        disabled={!!(item.debit && parseFloat(item.debit) > 0)}
                       />
                     </div>
-                    <div className="col-span-1 text-center">
+                    <div className="col-span-1 flex justify-center">
                       <Button
                         type="button"
                         variant="ghost"
                         size="icon"
-                        className="text-red-500 hover:text-red-700"
+                        className="text-red-500 hover:text-red-700 h-8 w-8"
                         onClick={() => removeItem(item.id)}
                       >
                         <Trash2 className="w-4 h-4" />
@@ -204,19 +223,44 @@ export function JurnalForm({ coas }: { coas: Coa[] }) {
                 ))}
               </div>
 
-              <div className="grid grid-cols-12 gap-4 p-3 bg-muted/30 font-bold border-t">
-                <div className="col-span-5 text-right">Total:</div>
-                <div className={`col-span-3 text-right ${!isBalanced && totalDebit > 0 ? 'text-red-500' : 'text-green-600'}`}>
-                  {new Intl.NumberFormat('id-ID').format(totalDebit)}
+              {/* Totals row */}
+              <div className="grid grid-cols-12 gap-2 p-3 bg-muted/30 font-bold border-t">
+                <div className="col-span-5 text-right text-sm">Total:</div>
+                <div className={`col-span-3 text-right ${totalDebit > 0 && !isBalanced ? 'text-red-500' : totalDebit > 0 ? 'text-green-700' : ''}`}>
+                  {formatRupiah(totalDebit)}
                 </div>
-                <div className={`col-span-3 text-right ${!isBalanced && totalCredit > 0 ? 'text-red-500' : 'text-green-600'}`}>
-                  {new Intl.NumberFormat('id-ID').format(totalCredit)}
+                <div className={`col-span-3 text-right ${totalCredit > 0 && !isBalanced ? 'text-red-500' : totalCredit > 0 ? 'text-green-700' : ''}`}>
+                  {formatRupiah(totalCredit)}
                 </div>
-                <div className="col-span-1"></div>
+                <div className="col-span-1 flex justify-center">
+                  {totalDebit > 0 && (
+                    isBalanced
+                      ? <CheckCircle2 className="w-5 h-5 text-green-600" />
+                      : <AlertCircle className="w-5 h-5 text-red-500" />
+                  )}
+                </div>
               </div>
             </div>
+
+            {/* Balance status message */}
+            {totalDebit > 0 && !isBalanced && (
+              <div className="flex items-center gap-2 text-sm text-red-600 bg-red-50 p-3 rounded-md border border-red-200">
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                <span>
+                  Jurnal belum balance. Selisih:{' '}
+                  <strong>Rp {formatRupiah(Math.abs(totalDebit - totalCredit))}</strong>
+                </span>
+              </div>
+            )}
+            {isBalanced && (
+              <div className="flex items-center gap-2 text-sm text-green-700 bg-green-50 p-3 rounded-md border border-green-200">
+                <CheckCircle2 className="w-4 h-4 shrink-0" />
+                <span>Jurnal balance ✓ — siap disimpan</span>
+              </div>
+            )}
           </div>
         </CardContent>
+
         <CardFooter className="flex justify-between border-t p-6">
           <Button type="button" variant="outline" onClick={() => router.back()}>
             Batal
