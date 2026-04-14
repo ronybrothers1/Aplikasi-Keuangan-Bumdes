@@ -1,0 +1,86 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Tenant {
+  id        String   @id @default(cuid())
+  name      String
+  createdAt DateTime @default(now())
+  users     User[]
+  coas      Coa[]
+  journals  Journal[]
+  units     Unit[]
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  password  String
+  name      String
+  role      String   // SUPER_ADMIN, ADMIN, OPERATOR
+  tenantId  String?
+  tenant    Tenant?  @relation(fields: [tenantId], references: [id])
+  createdAt DateTime @default(now())
+}
+
+model Unit {
+  id        String   @id @default(cuid())
+  name      String
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id])
+  journals  Journal[]
+}
+
+model Coa {
+  id            String   @id @default(cuid())
+  code          String
+  name          String
+  type          String   // ASSET, LIABILITY, EQUITY, REVENUE, EXPENSE
+  normalBalance String   // DEBIT, CREDIT
+  tenantId      String
+  tenant        Tenant   @relation(fields: [tenantId], references: [id])
+  journalItems  JournalItem[]
+
+  @@unique([code, tenantId])
+}
+
+model Journal {
+  id          String   @id @default(cuid())
+  number      String
+  date        DateTime
+  description String
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id])
+  unitId      String?
+  unit        Unit?    @relation(fields: [unitId], references: [id])
+  items       JournalItem[]
+  createdAt   DateTime @default(now())
+  createdBy   String
+}
+
+model JournalItem {
+  id        String   @id @default(cuid())
+  journalId String
+  journal   Journal  @relation(fields: [journalId], references: [id], onDelete: Cascade)
+  coaId     String
+  coa       Coa      @relation(fields: [coaId], references: [id])
+  debit     Float    @default(0)
+  credit    Float    @default(0)
+}
+
+model AuditTrail {
+  id        String   @id @default(cuid())
+  action    String
+  tableName String
+  recordId  String
+  oldData   String?
+  newData   String?
+  userId    String
+  tenantId  String
+  createdAt DateTime @default(now())
+}
