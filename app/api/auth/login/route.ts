@@ -1,3 +1,5 @@
+export const runtime = 'nodejs'
+
 import { db } from '@/lib/db'
 import { encrypt } from '@/lib/auth'
 import bcrypt from 'bcryptjs'

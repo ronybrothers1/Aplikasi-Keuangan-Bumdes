@@ -1,9 +1,34 @@
+# dependencies
 node_modules/
+
+# next.js
 .next/
-coverage/
-.DS_Store
-*.log
+out/
+
+# production
+build/
+
+# generated
+/generated/prisma
+
+# database files - jangan commit SQLite ke repo
+prisma/dev.db
+prisma/dev.db-journal
+prisma/*.db
+prisma/*.db-journal
+
+# env files
 .env*
 !.env.example
 
-/generated/prisma
+# debug
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# typescript
+tsconfig.tsbuildinfo
+*.tsbuildinfo
